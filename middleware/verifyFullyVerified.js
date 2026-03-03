@@ -29,10 +29,11 @@ const verifyFullyVerified = async (req, res, next) => {
     next();
 
   } catch (error) {
-    res.status(400).json({
-      message: "Verification check failed"
-    });
-  }
+  console.error("VERIFY ERROR:", error);
+  res.status(400).json({
+    message: error.message
+  });
+}
 };
 
 module.exports = verifyFullyVerified;
