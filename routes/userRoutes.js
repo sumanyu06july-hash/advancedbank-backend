@@ -3,6 +3,36 @@ const router = express.Router();
 const verifyToken = require("../middleware/verifyToken");
 const { db} = require("../config/firebase");
 
+
+router.post("/init-user", verifyToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const email = req.user.email;
+    const name = req.user.name || "User";
+
+    const userRef = db.collection("users").doc(uid);
+    const userDoc = await userRef.get();
+
+    if (userDoc.exists) {
+      return res.json({ message: "User already initialized" });
+    }
+
+    await userRef.set({
+      name,
+      email,
+      role: "user",
+      balance: 0,
+      createdAt: new Date()
+    });
+
+    res.json({ message: "User initialized successfully" });
+
+  } catch (error) {
+    res.status(500).json({ message: "Initialization failed" });
+  }
+});
+
+
 router.get("/profile", verifyToken, async (req, res) => {
   res.json({
     message: "Protected route accessed",
