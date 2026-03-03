@@ -6,6 +6,9 @@ const admin = require("firebase-admin");
 require("./config/firebase");
 
 const app = express();
+app.get("/", (req, res) => {
+  res.send("QuantumBank Backend Running 🚀");
+});
 
 app.use(cors());
 app.use(express.json());
