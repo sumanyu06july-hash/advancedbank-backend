@@ -3,6 +3,9 @@ const router = express.Router();
 const verifyToken = require("../middleware/verifyToken");
 const { db} = require("../config/firebase");
 
+router.get("/debug-test", (req, res) => {
+  res.send("USER ROUTES WORKING");
+});
 
 router.post("/init-user", verifyToken, async (req, res) => {
   try {
