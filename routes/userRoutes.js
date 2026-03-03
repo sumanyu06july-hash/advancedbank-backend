@@ -40,6 +40,29 @@ router.get("/my-loans", verifyToken, async (req, res) => {
   }
 });
 
+// ======================================
+// GET FRAUD ALERTS (SAFE)
+// ======================================
+router.get("/fraud-alerts", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.collection("fraudAlerts").get();
+
+    const alerts = [];
+
+    snapshot.forEach(doc => {
+      alerts.push({ id: doc.id, ...doc.data() });
+    });
+
+    console.log("Fraud Alerts Found:", alerts.length);
+
+    res.json(alerts);
+
+  } catch (err) {
+    console.error("Fraud Fetch Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // ============================
 // REQUEST LOAN
 // ============================
