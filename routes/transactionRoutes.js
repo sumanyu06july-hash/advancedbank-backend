@@ -12,16 +12,15 @@ const checkFraud = require("../utils/fraudEngine");
 const logAudit = require("../utils/auditLogger");
 
 /* ======================================================
-   SECURE TRANSFER (WITH FRAUD + AUDIT + EMAIL)
+   CREDIT SUMMARY
 ====================================================== */
 router.get("/credit-summary", verifyToken, verifyFullyVerified, async (req, res) => {
   try {
     const uid = req.user.uid;
     const userDoc = await db.collection("users").doc(uid).get();
 
-    if (!userDoc.exists) {
+    if (!userDoc.exists)
       return res.status(404).json({ message: "User not found" });
-    }
 
     const user = userDoc.data();
 
@@ -30,13 +29,16 @@ router.get("/credit-summary", verifyToken, verifyFullyVerified, async (req, res)
       creditUsed: user.creditUsed || 0,
       interestAccrued: user.interestAccrued || 0,
       totalDue: (user.creditUsed || 0) + (user.interestAccrued || 0),
-      availableCredit: (user.creditLimit || 0) - (user.creditUsed || 0)
+      availableCredit: (user.creditLimit || 0) - (user.creditUsed || 0),
     });
-
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
 });
+
+/* ======================================================
+   SECURE TRANSFER
+====================================================== */
 router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
   try {
     const { amount, method, pin, source } = req.body;
@@ -50,6 +52,8 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
 
     const userRef = db.collection("users").doc(uid);
     const referenceId = "TXN" + Date.now();
+
+    let fraudResult = { freeze: false };
 
     await db.runTransaction(async (transaction) => {
       const userDoc = await transaction.get(userRef);
@@ -65,51 +69,69 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
         if (!match) throw new Error("Invalid PIN");
       }
 
-      // 🔐 FRAUD CHECK
-      const fraudCheck = await checkFraud(uid, user, amount);
-      if (fraudCheck.freeze) {
+      // ✅ FRAUD CHECK (NO WRITES HERE)
+      fraudResult = checkFraud(user, amount);
+
+      if (fraudResult.freeze) {
         transaction.update(userRef, {
           isFrozen: true,
-          freezeReason: fraudCheck.reason
+          freezeReason: fraudResult.reason,
         });
-        throw new Error("Account frozen due to suspicious activity");
+        return; // stop further transaction updates
       }
 
       let newBalance = user.balance || 0;
       let newCreditUsed = user.creditUsed || 0;
 
       if (source === "balance") {
-        if (user.role !== "admin" && newBalance < amount)
+        if (newBalance < amount)
           throw new Error("Insufficient balance");
-        if (user.role !== "admin") newBalance -= amount;
+        newBalance -= amount;
       }
 
       if (source === "credit") {
-        const available = (user.creditLimit || 0) - newCreditUsed;
-        if (user.role !== "admin" && available < amount)
+        const available =
+          (user.creditLimit || 0) - newCreditUsed;
+        if (available < amount)
           throw new Error("Credit limit exceeded");
-        if (user.role !== "admin") newCreditUsed += amount;
+        newCreditUsed += amount;
       }
 
       transaction.update(userRef, {
         balance: newBalance,
-        creditUsed: newCreditUsed
+        creditUsed: newCreditUsed,
       });
 
-      transaction.set(userRef.collection("transactions").doc(), {
-        type: source === "credit" ? "credit-spend" : "transfer",
-        amount,
-        source,
-        referenceId,
-        timestamp: new Date(),
-        status: "success"
-      });
+      transaction.set(
+        userRef.collection("transactions").doc(),
+        {
+          type: source === "credit" ? "credit-spend" : "transfer",
+          amount,
+          source,
+          referenceId,
+          timestamp: new Date(),
+          status: "success",
+        }
+      );
     });
 
-    // ✅ AUDIT LOG (after commit)
+    // 🔴 If Fraud Triggered → Create Alert Outside Transaction
+    if (fraudResult.freeze) {
+      await db.collection("fraudAlerts").add({
+        userId: uid,
+        reason: fraudResult.reason,
+        amount,
+        status: "active",
+        createdAt: new Date(),
+      });
+
+      return res.status(400).json({
+        message: "Account frozen due to suspicious activity",
+      });
+    }
+
     await logAudit(uid, "TRANSFER", { amount, source, referenceId });
 
-    // ✅ EMAIL ALERT
     const updatedUser = await userRef.get();
     const userData = updatedUser.data();
 
@@ -131,125 +153,6 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
   }
 });
 
-
-/* ======================================================
-   CREDIT REPAYMENT (INTEREST FIRST)
-====================================================== */
-router.post("/repay-credit", verifyToken, verifyFullyVerified, async (req, res) => {
-  try {
-    const { amount, method, pin } = req.body;
-    const uid = req.user.uid;
-    const userRef = db.collection("users").doc(uid);
-    const referenceId = "TXN" + Date.now();
-
-    await db.runTransaction(async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      if (!userDoc.exists) throw new Error("User not found");
-
-      const user = userDoc.data();
-
-      if (method === "pin") {
-        const match = await bcrypt.compare(pin, user.upiPinHash);
-        if (!match) throw new Error("Invalid PIN");
-      }
-
-      let interest = user.interestAccrued || 0;
-      let principal = user.creditUsed || 0;
-      let balance = user.balance || 0;
-
-      if (principal <= 0 && interest <= 0)
-        throw new Error("No outstanding dues");
-
-      if (user.role !== "admin" && balance < amount)
-        throw new Error("Insufficient balance");
-
-      let remaining = amount;
-
-      const interestPaid = Math.min(remaining, interest);
-      interest -= interestPaid;
-      remaining -= interestPaid;
-
-      const principalPaid = Math.min(remaining, principal);
-      principal -= principalPaid;
-
-      const totalPaid = interestPaid + principalPaid;
-
-      transaction.update(userRef, {
-        balance: user.role === "admin" ? balance : balance - totalPaid,
-        creditUsed: principal,
-        interestAccrued: interest
-      });
-
-      transaction.set(userRef.collection("transactions").doc(), {
-        type: "credit-repayment",
-        totalPaid,
-        interestPaid,
-        principalPaid,
-        referenceId,
-        timestamp: new Date(),
-        status: "success"
-      });
-    });
-
-    await logAudit(uid, "CREDIT_REPAYMENT", { amount, referenceId });
-
-    res.json({ message: "Credit repaid successfully" });
-
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-});
-
-
-/* ======================================================
-   APPLY INTEREST
-====================================================== */
-router.post("/apply-interest", verifyToken, verifyFullyVerified, async (req, res) => {
-  try {
-    const uid = req.user.uid;
-    const userRef = db.collection("users").doc(uid);
-
-    await db.runTransaction(async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      if (!userDoc.exists) throw new Error("User not found");
-
-      const user = userDoc.data();
-
-      if (!user.creditUsed || user.creditUsed <= 0)
-        throw new Error("No credit used");
-
-      const { interest } = calculateInterest(
-        user.creditUsed,
-        user.lastInterestApplied
-      );
-
-      if (interest <= 0)
-        throw new Error("No interest to apply yet");
-
-      transaction.update(userRef, {
-        interestAccrued: (user.interestAccrued || 0) + interest,
-        lastInterestApplied: new Date()
-      });
-
-      transaction.set(userRef.collection("transactions").doc(), {
-        type: "interest-applied",
-        amount: interest,
-        referenceId: "TXN" + Date.now(),
-        timestamp: new Date(),
-        status: "success"
-      });
-    });
-
-    await logAudit(uid, "INTEREST_APPLIED", {});
-
-    res.json({ message: "Interest applied successfully" });
-
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-});
-
-
 /* ======================================================
    TRANSACTION HISTORY
 ====================================================== */
@@ -266,32 +169,14 @@ router.get("/history", verifyToken, verifyFullyVerified, async (req, res) => {
       .get();
 
     const transactions = [];
-    snapshot.forEach(doc => {
+    snapshot.forEach((doc) => {
       transactions.push({ id: doc.id, ...doc.data() });
     });
 
     res.json(transactions);
-
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
-});
-
-
-/* ======================================================
-   PRODUCTS LIST
-====================================================== */
-router.get("/products", verifyToken, verifyFullyVerified, async (req, res) => {
-  const snapshot = await db.collection("products")
-    .where("active", "==", true)
-    .get();
-
-  const products = [];
-  snapshot.forEach(doc => {
-    products.push({ id: doc.id, ...doc.data() });
-  });
-
-  res.json(products);
 });
 
 module.exports = router;
