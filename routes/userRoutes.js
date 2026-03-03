@@ -12,6 +12,97 @@ router.get("/profile", verifyToken, async (req, res) => {
 });
 
 // ============================
+// GET USER LOAN REQUESTS
+// ============================
+router.get("/my-loans", verifyToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+
+    const snapshot = await db
+      .collection("loanRequests")
+      .where("userId", "==", uid)
+      .orderBy("createdAt", "desc")
+      .get();
+
+    const loans = [];
+    snapshot.forEach(doc => {
+      loans.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.json(loans);
+
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// ============================
+// REQUEST LOAN
+// ============================
+router.post("/request-loan", verifyToken, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const uid = req.user.uid;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: "Invalid amount" });
+    }
+
+    // Optional: Prevent multiple active loans
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = userDoc.data();
+    if (user.loanActive) {
+      return res.status(400).json({ message: "Loan already active" });
+    }
+
+    await db.collection("loanRequests").add({
+      userId: uid,
+      amount,
+      status: "pending",
+      createdAt: new Date()
+    });
+
+    res.json({ message: "Loan request submitted" });
+
+  } catch (err) {
+    console.error("Loan Request Error:", err);
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// ============================
+// TRIGGER FRAUD (TESTING)
+// ============================
+router.post("/trigger-fraud", verifyToken, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+
+    const userRef = db.collection("users").doc(uid);
+
+    await userRef.update({
+      isFrozen: true,
+      freezeReason: "Manual fraud trigger",
+    });
+
+    await db.collection("fraudAlerts").add({
+      userId: uid,
+      reason: "Manual fraud trigger",
+      createdAt: new Date(),
+      status: "active"
+    });
+
+    res.json({ message: "Fraud alert triggered" });
+
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// ============================
 // REQUEST DEPOSIT
 // ============================
 router.post("/request-deposit", verifyToken, async (req, res) => {
