@@ -5,6 +5,16 @@ const admin = require("firebase-admin");
 
 require("./config/firebase");
 
+const cors = require("cors");
+
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://your-admin-site.onrender.com"
+  ],
+  credentials: true
+}));
+
 const app = express();
 app.get("/", (req, res) => {
   res.send("QuantumBank Backend Running 🚀");
