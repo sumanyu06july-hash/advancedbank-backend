@@ -66,7 +66,7 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
       }
 
       // 🔐 FRAUD CHECK
-      const fraudCheck = checkFraud(user, amount);
+      const fraudCheck = await checkFraud(uid, user, amount);
       if (fraudCheck.freeze) {
         transaction.update(userRef, {
           isFrozen: true,
