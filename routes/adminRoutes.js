@@ -3,217 +3,230 @@ const router = express.Router();
 
 const verifyToken = require("../middleware/verifyToken");
 const verifyAdmin = require("../middleware/verifyAdmin");
+
 const { db } = require("../config/firebase");
 
 /* ======================================================
-   ADMIN DASHBOARD
+   ADMIN DASHBOARD STATS
 ====================================================== */
 router.get("/dashboard", verifyToken, verifyAdmin, async (req, res) => {
-  res.json({
-    message: "Admin authenticated",
-    adminId: req.user.uid
-  });
+  try {
+    const usersSnap = await db.collection("users").get();
+    const depositsSnap = await db.collection("depositRequests")
+      .where("status", "==", "pending")
+      .get();
+    const fraudSnap = await db.collection("fraudAlerts")
+      .where("resolved", "==", false)
+      .get();
+
+    let totalVolume = 0;
+    let creditSpend = 0;
+    let transfers = 0;
+
+    const transactionsSnap = await db.collectionGroup("transactions").get();
+
+    transactionsSnap.forEach(doc => {
+      const t = doc.data();
+      totalVolume += t.amount || 0;
+      if (t.type === "credit-spend") creditSpend += t.amount || 0;
+      if (t.type === "transfer") transfers += t.amount || 0;
+    });
+
+    res.json({
+      totalUsers: usersSnap.size,
+      pendingDeposits: depositsSnap.size,
+      fraudAlerts: fraudSnap.size,
+      totalVolume,
+      creditSpend,
+      transfers
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Dashboard load failed" });
+  }
 });
 
+
 /* ======================================================
-   LIST ALL USERS
+   GET ALL USERS
 ====================================================== */
 router.get("/users", verifyToken, verifyAdmin, async (req, res) => {
-  const snapshot = await db.collection("users").get();
-  const users = [];
-  snapshot.forEach(doc => {
-    users.push({ uid: doc.id, ...doc.data() });
-  });
-  res.json(users);
+  try {
+    const snapshot = await db.collection("users").get();
+    const users = [];
+
+    snapshot.forEach(doc => {
+      users.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json(users);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
 });
 
-/* ======================================================
-   FREEZE / UNFREEZE USER
-====================================================== */
-router.post("/freeze-user/:uid", verifyToken, verifyAdmin, async (req, res) => {
-  const { freeze } = req.body;
-  const uid = req.params.uid;
-
-  await db.collection("users").doc(uid).update({
-    isFrozen: freeze
-  });
-
-  await db.collection("auditLogs").add({
-    action: freeze ? "FREEZE_USER" : "UNFREEZE_USER",
-    userId: uid,
-    adminId: req.user.uid,
-    timestamp: new Date()
-  });
-
-  res.json({ message: "User status updated" });
-});
-
-/* ======================================================
-   UNLOCK UPI
-====================================================== */
-router.post("/unlock-upi", verifyToken, verifyAdmin, async (req, res) => {
-  const { targetUid } = req.body;
-
-  await db.collection("users").doc(targetUid).update({
-    upiLocked: false,
-    upiAttempts: 0
-  });
-
-  await db.collection("auditLogs").add({
-    action: "UNLOCK_UPI",
-    userId: targetUid,
-    adminId: req.user.uid,
-    timestamp: new Date()
-  });
-
-  res.json({ message: "UPI unlocked" });
-});
 
 /* ======================================================
    PENDING DEPOSITS
 ====================================================== */
 router.get("/deposit-requests", verifyToken, verifyAdmin, async (req, res) => {
-  const snapshot = await db.collection("depositRequests")
-    .where("status", "==", "pending")
-    .get();
+  try {
+    const snapshot = await db.collection("depositRequests")
+      .where("status", "==", "pending")
+      .get();
 
-  const data = [];
-  snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+    const deposits = [];
+    snapshot.forEach(doc => {
+      deposits.push({ id: doc.id, ...doc.data() });
+    });
 
-  res.json(data);
+    res.json(deposits);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch deposits" });
+  }
 });
+
 
 /* ======================================================
    APPROVE DEPOSIT
 ====================================================== */
-router.post("/approve-deposit/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const depositRef = db.collection("depositRequests").doc(id);
+router.post("/approve-deposit", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { depositId } = req.body;
 
-  await db.runTransaction(async (transaction) => {
-    const depositDoc = await transaction.get(depositRef);
-    if (!depositDoc.exists) throw new Error("Deposit not found");
+    const depositRef = db.collection("depositRequests").doc(depositId);
 
-    const deposit = depositDoc.data();
-    if (deposit.status !== "pending")
-      throw new Error("Already processed");
+    await db.runTransaction(async transaction => {
+      const depositDoc = await transaction.get(depositRef);
+      if (!depositDoc.exists) throw new Error("Deposit not found");
 
-    const userRef = db.collection("users").doc(deposit.userId);
-    const userDoc = await transaction.get(userRef);
-    const user = userDoc.data();
+      const deposit = depositDoc.data();
+      if (deposit.status !== "pending")
+        throw new Error("Already processed");
 
-    transaction.update(userRef, {
-      balance: (user.balance || 0) + deposit.amount
+      const userRef = db.collection("users").doc(deposit.userId);
+      const userDoc = await transaction.get(userRef);
+      const user = userDoc.data();
+
+      transaction.update(userRef, {
+        balance: (user.balance || 0) + deposit.amount
+      });
+
+      transaction.update(depositRef, {
+        status: "approved",
+        reviewedAt: new Date(),
+        reviewedBy: req.user.uid
+      });
+
+      transaction.set(userRef.collection("transactions").doc(), {
+        type: "deposit-approved",
+        amount: deposit.amount,
+        timestamp: new Date(),
+        referenceId: "TXN" + Date.now(),
+        status: "success"
+      });
     });
 
-    transaction.update(depositRef, {
-      status: "approved",
-      reviewedAt: new Date(),
-      reviewedBy: req.user.uid
-    });
+    res.json({ message: "Deposit approved" });
 
-    transaction.set(userRef.collection("transactions").doc(), {
-      type: "deposit-approved",
-      amount: deposit.amount,
-      timestamp: new Date(),
-      referenceId: "TXN" + Date.now(),
-      status: "success"
-    });
-  });
-
-  await db.collection("auditLogs").add({
-    action: "APPROVE_DEPOSIT",
-    userId: id,
-    adminId: req.user.uid,
-    timestamp: new Date()
-  });
-
-  res.json({ message: "Deposit approved" });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
 });
+
 
 /* ======================================================
    LOAN REQUESTS
 ====================================================== */
 router.get("/loan-requests", verifyToken, verifyAdmin, async (req, res) => {
-  const snapshot = await db.collection("loanRequests")
-    .where("status", "==", "pending")
-    .get();
+  try {
+    const snapshot = await db.collection("loanRequests")
+      .where("status", "==", "pending")
+      .get();
 
-  const data = [];
-  snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+    const loans = [];
+    snapshot.forEach(doc => {
+      loans.push({ id: doc.id, ...doc.data() });
+    });
 
-  res.json(data);
+    res.json(loans);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch loans" });
+  }
 });
 
-/* ======================================================
-   APPROVE LOAN
-====================================================== */
-router.post("/approve-loan/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const loanRef = db.collection("loanRequests").doc(id);
-
-  await db.runTransaction(async (transaction) => {
-    const loanDoc = await transaction.get(loanRef);
-    if (!loanDoc.exists) throw new Error("Loan not found");
-
-    const loan = loanDoc.data();
-    if (loan.status !== "pending")
-      throw new Error("Already processed");
-
-    const userRef = db.collection("users").doc(loan.userId);
-    const userDoc = await transaction.get(userRef);
-    const user = userDoc.data();
-
-    transaction.update(userRef, {
-      balance: (user.balance || 0) + loan.amount
-    });
-
-    transaction.update(loanRef, {
-      status: "approved",
-      approvedAt: new Date(),
-      approvedBy: req.user.uid
-    });
-
-    transaction.set(userRef.collection("transactions").doc(), {
-      type: "loan-disbursed",
-      amount: loan.amount,
-      timestamp: new Date(),
-      referenceId: "TXN" + Date.now(),
-      status: "success"
-    });
-  });
-
-  await db.collection("auditLogs").add({
-    action: "APPROVE_LOAN",
-    adminId: req.user.uid,
-    timestamp: new Date()
-  });
-
-  res.json({ message: "Loan approved" });
-});
 
 /* ======================================================
    FRAUD ALERTS
 ====================================================== */
 router.get("/fraud-alerts", verifyToken, verifyAdmin, async (req, res) => {
-  const snapshot = await db.collection("fraudAlerts").get();
-  const data = [];
-  snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-  res.json(data);
+  try {
+    const snapshot = await db.collection("fraudAlerts")
+      .where("resolved", "==", false)
+      .get();
+
+    const alerts = [];
+    snapshot.forEach(doc => {
+      alerts.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.json(alerts);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch fraud alerts" });
+  }
 });
+
 
 /* ======================================================
    AUDIT LOGS
 ====================================================== */
 router.get("/audit-logs", verifyToken, verifyAdmin, async (req, res) => {
-  const snapshot = await db.collection("auditLogs")
-    .orderBy("timestamp", "desc")
-    .limit(100)
-    .get();
+  try {
+    const snapshot = await db.collection("auditLogs")
+      .orderBy("timestamp", "desc")
+      .limit(100)
+      .get();
 
-  const data = [];
-  snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-  res.json(data);
+    const logs = [];
+    snapshot.forEach(doc => {
+      logs.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.json(logs);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch logs" });
+  }
+});
+
+
+/* ======================================================
+   ALL TRANSACTIONS (GLOBAL VIEW)
+====================================================== */
+router.get("/all-transactions", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.collectionGroup("transactions")
+      .orderBy("timestamp", "desc")
+      .limit(200)
+      .get();
+
+    const transactions = [];
+    snapshot.forEach(doc => {
+      transactions.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.json(transactions);
+
+  } catch {
+    res.status(500).json({ message: "Failed to fetch transactions" });
+  }
 });
 
 module.exports = router;
