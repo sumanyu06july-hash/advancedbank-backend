@@ -14,6 +14,29 @@ const logAudit = require("../utils/auditLogger");
 /* ======================================================
    SECURE TRANSFER (WITH FRAUD + AUDIT + EMAIL)
 ====================================================== */
+router.get("/credit-summary", verifyToken, verifyFullyVerified, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const userDoc = await db.collection("users").doc(uid).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = userDoc.data();
+
+    res.json({
+      creditLimit: user.creditLimit || 0,
+      creditUsed: user.creditUsed || 0,
+      interestAccrued: user.interestAccrued || 0,
+      totalDue: (user.creditUsed || 0) + (user.interestAccrued || 0),
+      availableCredit: (user.creditLimit || 0) - (user.creditUsed || 0)
+    });
+
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
 router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
   try {
     const { amount, method, pin, source } = req.body;
