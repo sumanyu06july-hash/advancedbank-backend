@@ -12,7 +12,7 @@ router.get("/profile", verifyToken, async (req, res) => {
 });
 
 // ============================
-// GET USER LOAN REQUESTS (SAFE)
+// GET USER LOAN REQUESTS (DEBUG)
 // ============================
 router.get("/my-loans", verifyToken, async (req, res) => {
   try {
@@ -29,18 +29,14 @@ router.get("/my-loans", verifyToken, async (req, res) => {
       loans.push({ id: doc.id, ...doc.data() });
     });
 
-    // Sort manually (avoids Firestore index requirement)
-    loans.sort((a, b) => {
-      const aTime = a.createdAt?._seconds || 0;
-      const bTime = b.createdAt?._seconds || 0;
-      return bTime - aTime;
-    });
-
     res.json(loans);
 
   } catch (err) {
-    console.error("My Loans Fetch Error:", err);
-    res.status(400).json({ message: err.message });
+    console.error("MY LOANS ERROR:", err);
+    res.status(500).json({
+      error: err.message,
+      full: err
+    });
   }
 });
 
