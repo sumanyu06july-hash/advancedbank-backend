@@ -10,4 +10,30 @@ router.get("/profile", verifyToken, async (req, res) => {
   });
 });
 
+// ============================
+// REQUEST DEPOSIT
+// ============================
+router.post("/request-deposit", verifyToken, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const uid = req.user.uid;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: "Invalid amount" });
+    }
+
+    await db.collection("depositRequests").add({
+      userId: uid,
+      amount,
+      status: "pending",
+      createdAt: new Date()
+    });
+
+    res.json({ message: "Deposit request submitted" });
+
+  } catch (err) {
+    res.status(400).json({ message: "Deposit request failed" });
+  }
+});
+
 module.exports = router;
