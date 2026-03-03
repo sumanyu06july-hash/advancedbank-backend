@@ -12,15 +12,17 @@ const verifyFullyVerified = async (req, res, next) => {
 
     const user = userDoc.data();
 
+    // Email must be verified
     if (!req.user.email_verified) {
       return res.status(403).json({
         message: "Email not verified"
       });
     }
 
-    if (!user.phoneVerified) {
+    // Optional: prevent frozen accounts
+    if (user.isFrozen) {
       return res.status(403).json({
-        message: "Phone not verified"
+        message: "Account frozen"
       });
     }
 
