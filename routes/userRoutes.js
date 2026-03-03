@@ -31,9 +31,12 @@ router.post("/request-deposit", verifyToken, async (req, res) => {
 
     res.json({ message: "Deposit request submitted" });
 
-  } catch (err) {
-    res.status(400).json({ message: "Deposit request failed" });
-  }
+  }catch (err) {
+  console.error("Deposit Error:", err);
+  res.status(400).json({ 
+    message: err.message || "Deposit request failed" 
+  });
+}
 });
 
 module.exports = router;
