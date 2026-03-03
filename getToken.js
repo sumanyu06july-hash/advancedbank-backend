@@ -1,7 +1,7 @@
 const fetch = require("node-fetch");
 
 const API_KEY = "AIzaSyBF5no_E-wm7rCA4NhP3f0G4h6LX7OCytY"; // put your apiKey here
-const EMAIL = "spotifypremium.06072010@gmail.com";
+const EMAIL = "spotifypremium.06072010@gmail.com";;
 const PASSWORD = "Sumanyu@06";
 
 async function getToken() {
