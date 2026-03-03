@@ -5,7 +5,7 @@ const admin = require("firebase-admin");
 
 require("./config/firebase");
 
-const cors = require("cors");
+
 
 app.use(cors({
   origin: [
