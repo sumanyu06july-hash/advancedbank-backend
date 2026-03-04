@@ -37,11 +37,23 @@ router.post("/init-user", verifyToken, async (req, res) => {
 
 
 router.get("/profile", verifyToken, async (req, res) => {
+
+  const uid = req.user.uid;
+
+  const userDoc = await db.collection("users").doc(uid).get();
+
+  if (!userDoc.exists) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  const user = userDoc.data();
+
   res.json({
-    message: "Protected route accessed",
-    uid: req.user.uid,
-    email: req.user.email,
+    uid,
+    email: user.email,
+    balance: user.balance || 0
   });
+
 });
 
 // ============================
