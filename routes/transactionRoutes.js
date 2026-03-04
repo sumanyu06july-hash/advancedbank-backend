@@ -156,8 +156,9 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
 /* ======================================================
    TRANSACTION HISTORY
 ====================================================== */
-router.get("/history", verifyToken, verifyFullyVerified, async (req, res) => {
+router.get("/history", verifyToken, async (req, res) => {
   try {
+
     const uid = req.user.uid;
 
     const snapshot = await db
@@ -165,17 +166,27 @@ router.get("/history", verifyToken, verifyFullyVerified, async (req, res) => {
       .doc(uid)
       .collection("transactions")
       .orderBy("timestamp", "desc")
-      .limit(50)
       .get();
 
     const transactions = [];
-    snapshot.forEach((doc) => {
-      transactions.push({ id: doc.id, ...doc.data() });
+
+    snapshot.forEach(doc => {
+      transactions.push({
+        id: doc.id,
+        ...doc.data()
+      });
     });
 
     res.json(transactions);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+
+  } catch (err) {
+
+    console.error("Transaction History Error:", err);
+
+    res.status(500).json({
+      message: "Failed to fetch transactions"
+    });
+
   }
 });
 
