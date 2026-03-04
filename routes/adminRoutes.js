@@ -116,6 +116,9 @@ router.post("/approve-deposit", verifyToken, verifyAdmin, async (req, res) => {
       const userDoc = await transaction.get(userRef);
       const user = userDoc.data();
 
+      console.log("USER BALANCE BEFORE:", user.balance);
+      console.log("DEPOSIT AMOUNT:", deposit.amount);
+
       transaction.update(userRef, {
         balance: (user.balance || 0) + deposit.amount
       });
