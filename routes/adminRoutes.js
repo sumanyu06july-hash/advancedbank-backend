@@ -1,8 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-console.log("USER BALANCE BEFORE:", user.balance);
-console.log("DEPOSIT AMOUNT:", deposit.amount);
+
 
 const verifyToken = require("../middleware/verifyToken");
 const verifyAdmin = require("../middleware/verifyAdmin");
