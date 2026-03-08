@@ -159,6 +159,7 @@ router.post("/transfer", verifyToken, verifyFullyVerified, async (req, res) => {
 router.get("/history", verifyToken, async (req, res) => {
   try {
 
+    console.log("UID:", req.user.uid);
     const uid = req.user.uid;
 
     const snapshot = await db
