@@ -166,7 +166,6 @@ router.get("/history", verifyToken, async (req, res) => {
       .collection("users")
       .doc(uid)
       .collection("transactions")
-      .orderBy("timestamp", "desc")
       .get();
 
     const transactions = [];
